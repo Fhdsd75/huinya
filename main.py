@@ -1,3 +1,4 @@
+# main.py
 import logging
 import asyncio
 import threading
@@ -21,23 +22,19 @@ from db import init_db, conn, get_user_by_id
 from admin_notify import send_reminder_user, send_reminder_admin
 from config import TOKEN
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import date
 
+# Функция проверки напоминаний
 async def check_reminders():
-    """
-    Проверяет записи на завтрашний день и отправляет напоминания:
-      - Пользователю: индивидуальное напоминание.
-      - Администратору: сводное сообщение по всем записям.
-    """
     tomorrow = (datetime.now() + timedelta(days=1)).date().isoformat()
     cursor = conn.cursor()
     cursor.execute("SELECT id, user_id, booking_date, time_slot FROM bookings WHERE booking_date = ?", (tomorrow,))
     bookings = cursor.fetchall()
-    # Отправляем напоминание каждому пользователю
     for booking in bookings:
         booking_id, user_id, booking_date, time_slot = booking
         user = get_user_by_id(user_id)
         if user:
-            user_chat_id = user[1]  # Предполагается, что telegram_id хранится в столбце с индексом 1
+            user_chat_id = user[1]
             await send_reminder_user(user_chat_id, booking_date, time_slot)
     if bookings:
         summary = []
@@ -50,12 +47,11 @@ async def check_reminders():
                 summary.append((time_slot, user_name, user_phone))
         await send_reminder_admin(tomorrow, summary)
 
+# Запуск планировщика напоминаний в отдельном потоке
 def start_scheduler():
-    # Создаем отдельный цикл событий для планировщика в новом потоке
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     scheduler = AsyncIOScheduler(event_loop=loop)
-    # Планируем напоминание каждый день в 8:00
     scheduler.add_job(check_reminders, 'cron', hour=8, minute=0)
     scheduler.start()
     loop.run_forever()
@@ -86,10 +82,13 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^admin_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_message_handler))
     
-    # Основной обработчик callback-запросов для остальных команд
+    # Обработчик callback для остальных команд
     application.add_handler(CallbackQueryHandler(booking_callback_handler, pattern="^(?!admin_).*"))
+    # Обработчик для запроса контакта
+    from handlers import send_contact_callback
+    application.add_handler(CallbackQueryHandler(send_contact_callback, pattern="^send_contact$"))
     
-    # Запускаем планировщик в отдельном потоке
+    # Запуск планировщика в отдельном потоке
     threading.Thread(target=start_scheduler, daemon=True).start()
     
     application.run_polling()

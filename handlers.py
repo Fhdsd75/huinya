@@ -1,6 +1,4 @@
 # handlers.py
-# Асинхронные обработчики команд и диалогов основного Telegram-бота
-
 import re
 import calendar
 import sqlite3
@@ -15,20 +13,16 @@ from db import (add_user, get_user_by_telegram_id, get_user_by_id, add_booking,
                 get_all_users, get_bookings_by_user_id, get_booking_by_id, swap_bookings)
 from admin_notify import send_admin_notification
 from config import HOLIDAYS, TIME_SLOTS, MONTH_NAMES, WEEKDAY_NAMES, TOKEN
-# Импортируем админский список месяцев, который заполняется через админ-функционал
 from admin_handlers import admin_available_months
 
-# Состояния для ConversationHandler
 REGISTER_NAME, REGISTER_GROUP, REGISTER_PHONE, REGISTER_PURCHASED, REGISTER_REMAINING = range(5)
-# Состояния для обмена записями и запроса изменения профиля
 SWAP_SELECT = 100  
-SWAP_DATE = 101  # Не используется, выбор записи происходит через inline кнопки
+SWAP_DATE = 101  
 PROFILE_CHANGE = 200
 
 def normalize_phone(phone: str) -> str:
     return ''.join(filter(str.isdigit, phone))
 
-# --- Регистрация пользователя ---
 async def start(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     user = get_user_by_telegram_id(user_id)
@@ -50,10 +44,19 @@ async def register_group(update: Update, context: CallbackContext):
         await update.message.reply_text("Неверный формат группы. Попробуйте ещё раз. Пример: КБ0425")
         return REGISTER_GROUP
     context.user_data['group_code'] = group_code
+    inline_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Отправить контакт", callback_data="send_contact")]
+    ])
+    await update.message.reply_text("Отправьте, пожалуйста, ваш номер телефона:", reply_markup=inline_keyboard)
+    return REGISTER_PHONE
+
+async def send_contact_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Пожалуйста, нажмите кнопку ниже для отправки контакта.")
     contact_button = KeyboardButton("Отправить контакт", request_contact=True)
     reply_markup = ReplyKeyboardMarkup([[contact_button]], one_time_keyboard=True)
-    await update.message.reply_text("Отправьте, пожалуйста, ваш номер телефона:", reply_markup=reply_markup)
-    return REGISTER_PHONE
+    await update.effective_message.reply_text("Нажмите на кнопку 'Отправить контакт'", reply_markup=reply_markup)
 
 async def register_phone(update: Update, context: CallbackContext):
     contact = update.message.contact
@@ -99,7 +102,6 @@ async def cancel(update: Update, context: CallbackContext):
     await update.message.reply_text("Операция отменена.", reply_markup=ReplyKeyboardRemove())
     return -1
 
-# --- Главное меню и профиль пользователя ---
 async def show_main_menu(update: Update, context: CallbackContext):
     user = get_user_by_telegram_id(update.effective_user.id)
     if user and user[6] <= 0:
@@ -153,7 +155,6 @@ async def profile_change_request(update: Update, context: CallbackContext):
     await update.message.reply_text("Ваша заявка была отправлена, ожидайте.", reply_markup=ReplyKeyboardRemove())
     return await show_main_menu(update, context)
 
-# --- Запись на занятия ---
 async def start_booking(update: Update, context: CallbackContext):
     if not admin_available_months:
         await update.callback_query.edit_message_text("Запись недоступна. Нет доступных месяцев. Обратитесь к администратору.")
@@ -231,15 +232,12 @@ async def show_time_slots(update: Update, context: CallbackContext, year: int, m
     keyboard = []
     conn = sqlite3.connect('bot.db', check_same_thread=False)
     cur = conn.cursor()
-    # Получаем записи для данного дня с user_id
     cur.execute("SELECT time_slot, user_id FROM bookings WHERE booking_date = ?", (d.isoformat(),))
     bookings_data = cur.fetchall()
-    # Строим словарь: time_slot -> user_id
-    booked_dict = {row[0]: row[1] for row in bookings_data}
     from db import get_user_by_id
+    booked_dict = {row[0]: row[1] for row in bookings_data}
     for idx, slot in enumerate(TIME_SLOTS):
         if slot in booked_dict:
-            # Получаем имя пользователя, который записан
             booked_user = get_user_by_id(booked_dict[slot])
             if booked_user:
                 name = booked_user[2]
@@ -324,7 +322,7 @@ async def booking_callback_handler(update: Update, context: CallbackContext):
         add_booking(user[0], context.user_data['booking_date'], context.user_data['time_slot'])
         new_remaining = decrement_remaining(user[0])
         msg = (f"Пользователь {user[2]} (Группа: {user[3]}, Телефон: {user[4]}) записался на занятие: "
-               f"{context.user_data['booking_date']} {context.user_data['time_slot']}. Осталось: {new_remaining}")
+               f"{context.user_by_telegram_id['booking_date']} {context.user_data['time_slot']}. Осталось: {new_remaining}")
         await send_admin_notification(msg)
         await context.bot.delete_message(chat_id=update.callback_query.message.chat_id,
                                            message_id=update.callback_query.message.message_id)
@@ -416,7 +414,7 @@ async def booking_callback_handler(update: Update, context: CallbackContext):
             booking2 = get_booking_by_id(partner_booking_id)
             user1 = get_user_by_id(booking1[1])
             user2 = get_user_by_id(booking2[1])
-            admin_msg = (f"Обмен записей произведен:\n"
+            admin_msg = (f"Обмен записей произведён:\n"
                          f"Пользователь {user1[2]} (Группа: {user1[3]}, Телефон: {user1[4]}) обменял запись {booking1[2]} {booking1[3]} "
                          f"с пользователем {user2[2]} (Группа: {user2[3]}, Телефон: {user2[4]}), запись {booking2[2]} {booking2[3]}.")
             await send_admin_notification(admin_msg)
